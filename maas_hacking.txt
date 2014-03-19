@@ -1,0 +1,162 @@
+# reference: follow http://maas.ubuntu.com/docs/hacking.html#configuring-dhcp
+
+mkdir -p /home/$USER/.buildout/cache
+
+tee ~/.buildout/default.cfg <<EOF
+[buildout]
+download-cache = /home/$USER/.buildout/cache
+eggs-directory = /home/$USER/.buildout/eggs
+EOF
+
+sudo apt-get install bzr
+bzr branch lp:maas maas && cd maas
+make install-dependencies
+make test
+
+sudo apt-get remove -y python-librabbitmq
+sudo apt-get install -y python-crochet
+sudo apt-get install -y squid-deb-proxy
+sudo apt-get install -y authbind
+sudo apt-get install -y maas-dhcp
+
+make
+make syncdb
+make sampledata
+
+sudo tee -a /etc/tgt/targets.conf < contrib/tgt.conf
+
+./bin/maas-region-admin createsuperuser --username=$USER --email=$USER@maas.local
+
+export PYTHONPATH=/home/cloudbase/maas/src:/home/cloudbase/maas/etc
+export PATH=$PATH:/home/cloudbase/maas/bin:/home/cloudbase/maas/scripts
+
+uso visudo
+
+#Add
+Defaults        env_keep += PYTHONPATH
+
+# Append /home/cloudbase/maas/bin:/home/cloudbase/maas/scripts to secure_path
+Defaults        secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/cloudbase/maas/bin:/home/cloudbase/maas/scripts"
+
+# change
+%sudo   ALL=(ALL:ALL) ALL
+# in
+%sudo   ALL=(ALL:ALL) NOPASSWD: ALL
+
+sudo mkdir /var/lib/maas
+sudo mkdir /etc/maas
+
+
+# Set tftp port to 69 in:
+sudo vi etc/maas/pserv.yaml
+
+sudo touch /etc/authbind/byport/69
+sudo chmod a+x /etc/authbind/byport/69
+
+# Set port=53 in
+sudo vi services/dns/run
+sudo touch /etc/authbind/byport/53
+sudo chmod a+x /etc/authbind/byport/53
+
+sudo touch /etc/authbind/byport/68
+sudo chmod a+x /etc/authbind/byport/68
+
+sudo /etc/init.d/bind9 stop
+sudo update-rc.d -f bind9 remove
+
+vi ~/maas/etc/demo_maas_cluster.conf
+# Replace 0.0.0.0 with your eth0 address:
+MAAS_URL="http://0.0.0.0:5240/"
+
+vi ~/maas/src/provisioningserver/testing/bindfixture.py
+# Replace 127.0.0.1 with your eth1 address (NOT eth0):
+listen-on port {{port}} {127.0.0.1;};
+
+# add also on a life after listen-on ...
+allow-recursion {any;};
+
+# Get the DCP key:
+./bin/maas-region-admin shell
+from maasserver.models.nodegroup import *
+NodeGroup.objects.get().dhcp_key
+
+# Make sure your host has a sencond network adapter on an isolated network (eth1, in this example)!
+
+# Replace 10.57.36.x with your eth1 parameters and --omapi-key and run:
+
+sudo bin/maas-provision generate-dhcp-config --subnet 10.57.36.0 --interface eth1 --subnet-mask 255.255.255.0 --broadcast-ip 10.57.36.255 --dns-servers 10.57.36.1 --ntp-server pool.ntp.org --domain-name cbslmaastest.local --router-ip 10.57.36.1 --ip-range-low 10.57.36.100 --ip-range-high 10.57.36.200 --omapi-key iQBHk/yB2U98+7Ukpu/aU822v6TWj6GoUITcfWD/nug8SLhutzAQ0y1nXfTlKNCv1frPcD9hnMjuA/Xk1+xngg== -o /etc/maas/dhcpd.conf
+
+sudo service maas-dhcp-server restart
+
+ln -s /var/lib/maas/dhcp/dhcpd.leases ~/maas/run/
+
+sudo ln -s  ~/maas/etc/maas/pserv.yaml /etc/maas/pserv.yaml
+
+# This takes a while:
+sudo maas-import-pxe-files
+
+
+#Firewall and NAT
+
+INT_IFACE_NETWORK=10.57.36.0
+INT_IFACE_MASK_BITS=24
+EXT_IFACE=eth0
+
+sudo sed -i 's/^DEFAULT_FORWARD_POLICY=.*$/DEFAULT_FORWARD_POLICY="ACCEPT"/g' /etc/default/ufw
+
+sudo sed -i 's/^#net\/ipv4\/ip_forward=.*$/net\/ipv4\/ip_forward=1/g' /etc/ufw/sysctl.conf
+sudo sed -i 's/^#net\/ipv6\/conf\/default\/forwarding=.*$/net\/ipv6\/conf\/default\/forwarding=1/g' /etc/ufw/sysctl.conf
+
+sudo sed -i "s/^# Don't delete these required lines, otherwise there will be errors$/*nat\n:POSTROUTING ACCEPT \[0:0\]\n-A POSTROUTING -s $INT_IFACE_NETWORK\/$INT_IFACE_MASK_BITS -o $EXT_IFACE -j MASQUERADE\nCOMMIT\n\n# Don't delete these required lines, otherwise there will be errors\n/g" /etc/ufw/before.rules
+
+function add_module {
+    sudo /sbin/modprobe $1
+    echo $1 | sudo tee /etc/modules
+}
+
+add_module ip_tables
+add_module nf_conntrack
+add_module nf_conntrack_ftp
+add_module nf_conntrack_irc
+add_module iptable_nat
+add_module nf_nat_ftp
+
+# SSH
+sudo ufw allow 22
+# MaaS
+sudo ufw allow 5240
+
+# On eth1 only
+
+#DHCP
+sudo ufw allow in on eth1 proto udp to any port 67
+#DNS
+sudo ufw allow in on eth1 proto udp to any port 53
+sudo ufw allow in on eth1 proto tcp to any port 53
+#TFTP
+sudo ufw allow in on eth1 proto udp to any port 69
+#iSCSI
+sudo ufw allow in on eth1 proto tcp to any port 3260
+# squid
+sudo ufw allow in on eth1 proto tcp to any port 8000
+
+sudo ufw disable && sudo sudo ufw --force enable
+sudo /sbin/sysctl -p
+
+
+make run
+
+# Create a cluster configuration in the UI for eth1 (DHCP and DNS), NOT for eth0
+
+# Attach a new vm or baremetal host to eth1's network and boot it (discovery)
+# Once the discovery is done, edit the node and commission in (boot it again)
+# At this stage the node is ready to be started.
+# Add a public ssh key in your settings
+
+# Database:
+
+psql -h /home/cloudbase/maas/db maas
+
+ # To access it easily:
+
+bin/maas-region-admin dbshell
