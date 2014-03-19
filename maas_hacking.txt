@@ -157,6 +157,21 @@ make run
 
 psql -h /home/cloudbase/maas/db maas
 
- # To access it easily:
+ # Or, to access it easily:
 
 bin/maas-region-admin dbshell
+
+# To dump db contents (for maasserver in the example):
+./bin/maas-region-admin dumpdata maasserver > data.json
+
+# To load db contents:
+# 1. Make sure your db content that you want toi import doesn't conflict.
+# E.g. to delete the contents of BootImage:
+
+ bin/maas-region-admin shell
+
+ from maasserver.models.bootimage import *
+ BootImage.objects.all().delete()
+
+# 2. Load data
+./bin/maas-region-admin loaddata data.json
