@@ -1,0 +1,60 @@
+# -*- mode: shell-script -*-
+#
+# Control virtual system's "power" for VMWare Workstation / Fusion.
+#
+
+# Parameters.
+power_change={{power_change}}
+mac_address={{mac_address}} 
+
+#power_change=on
+#mac_address=00:50:56:28:D4:A8
+
+vmrunapi_url="http://192.168.209.1:6000/vmrun"
+
+
+# Choose command for virsh to make the requested power change happen.
+formulate_power_command() {
+  if [ ${power_change} = 'on' ]
+  then
+      echo 'start'
+  else
+      echo 'stop'
+  fi
+}
+
+
+# Express system's current state as expressed by virsh as "on" or "off".
+formulate_power_state() {
+    case $1 in
+    'started') echo 'on' ;;
+    'stopped') echo 'off' ;;
+    *)
+        echo "Got unknown power state from vmrunapi: '$1'" >&2
+        exit 1
+    esac
+}
+
+
+# Issue command to virsh, for the given system.
+issue_vmrunapi_command() {
+    vmx_path=`curl -s -S "${vmrunapi_url}/vm/find_by_mac_address/${mac_address}"`
+    vmx_path_enc=`python -c "import urllib; print urllib.quote('''${vmx_path}''')"`
+    vmrunapi_cmd=$1
+
+    status=`curl -H "Content-Type: application/json"  -s -S -X POST -d "{\"vmx_path\": \"${vmx_path}\"}"  "${vmrunapi_url}/vm/${vmrunapi_cmd}"`
+    echo $status
+}
+
+# Get the given system's power state: 'on' or 'off'.
+get_power_state() {
+    vmrunapi_state=$(issue_vmrunapi_command status)
+    formulate_power_state ${vmrunapi_state}
+}
+
+
+if [ "$(get_power_state)" != "${power_change}" ]
+then
+    issue_vmrunapi_command $(formulate_power_command)
+fi
+
