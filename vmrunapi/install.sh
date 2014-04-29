@@ -1,4 +1,4 @@
-#!/bin/nash
+#!/bin/bash
 
 BASEDIR=$(dirname $0)
 
