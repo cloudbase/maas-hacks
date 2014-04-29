@@ -7,9 +7,8 @@
 power_change={{power_change}}
 mac_address={{mac_address}} 
 
-#power_change=on
-#mac_address=00:50:56:28:D4:A8
-
+# This is the URL where vmrunapi.py replies.
+# The IP is tipically your host's VMWare NAT interface IP
 vmrunapi_url="http://192.168.209.1:6000/vmrun"
 
 
