@@ -1,6 +1,7 @@
 #!/bin/bash
 
-BASEDIR=$(dirname $0)
+SCRIPT=$(readlink -f $0)
+BASEDIR=$(dirname $SCRIPT)
 
 cd ~/maas
 
